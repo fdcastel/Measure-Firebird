@@ -7,11 +7,18 @@ param ($DriveLetter = 'C')
 #
 $recordsToInsert = 5 * 1000 * 1000    # 5 million records
 
-$user = 'SYSDBA'
-$password = 'masterkey'
 
-# ToDo: Detect Firebird path
-$isql = 'C:/Program Files/Firebird/Firebird_3_0/isql.exe'
+#
+# Initialization
+#
+$user = if ($env:FIREBIRD_USER) { $env:FIREBIRD_USER } elseif ($env:ISC_USER) { $env:ISC_USER } else { 'SYSDBA' }
+$password = if ($env:FIREBIRD_PASSWORD) { $env:FIREBIRD_PASSWORD } elseif ($env:ISC_PASSWORD) { $env:ISC_PASSWORD } else { 'masterkey' }
+$firebirdEnvironment = if ($env:FIREBIRD_ENVIRONMENT) { $env:FIREBIRD_ENVIRONMENT } else { 'C:/Program Files/Firebird/Firebird_3_0' }
+
+$isql = Join-Path $firebirdEnvironment 'isql.exe'
+if (-not (Test-Path $isql)) {
+  throw "isql.exe not found at path '$firebirdEnvironment'. Set FIREBIRD_ENVIRONMENT environment variable to the Firebird installation path."
+}
 
 
 #
