@@ -29,9 +29,7 @@ function Invoke-Isql {
     [Parameter(ValueFromPipeline = $true)]
     [string]$Sql,
 
-    [string]$Database = $null,
-
-    [switch]$IgnoreErrors
+    [string]$Database = $null
   )
 
   if ($Database) {
@@ -39,7 +37,7 @@ function Invoke-Isql {
   }
 
   $Sql | & $isql -b -q -pag 0 -user $user -password $password $Database > $null
-  if (($LASTEXITCODE -ne 0) -and (-not $IgnoreErrors)) {
+  if ($LASTEXITCODE -ne 0) {
     throw "Failed to execute SQL."
   }
 }
@@ -50,13 +48,11 @@ function Measure-Isql() {
     [Parameter(ValueFromPipeline = $true)]
     [string]$Sql,
 
-    [string]$Database = $null,
-
-    [switch]$IgnoreErrors
+    [string]$Database = $null
   )
 
   $elapsed = Measure-Command {
-    Invoke-Isql -Sql $Sql -Database $Database -IgnoreErrors:$IgnoreErrors
+    Invoke-Isql -Sql $Sql -Database $Database
   }
   
   return [math]::Round($elapsed.TotalMilliseconds)
