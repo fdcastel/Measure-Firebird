@@ -1,5 +1,11 @@
 [CmdletBinding()]
-param ($DriveLetter = 'C')
+param (
+  [string]
+  $DriveLetter = 'C',
+
+  [switch]
+  $UseLocalProtocol
+)
 
 
 #
@@ -24,38 +30,62 @@ if (-not (Test-Path $isql)) {
 #
 # Functions
 #
-function Invoke-Isql {
-  param(
-    [Parameter(ValueFromPipeline = $true)]
-    [string]$Sql,
+function Invoke-Isql(
+  [Parameter(Mandatory = $true, ValueFromPipeline = $true)]
+  [string]$Sql,
 
-    [string]$Database = $null
-  )
-
-  if ($Database) {
-    $Database = "localhost:$Database"
-  }
-
+  [string]$Database = $null
+) {
   $Sql | & $isql -b -q -pag 0 -user $user -password $password $Database > $null
   if ($LASTEXITCODE -ne 0) {
-    throw "Failed to execute SQL."
+    throw 'Failed to execute SQL.'
   }
 }
 
-function Measure-Isql() {
-  [CmdletBinding()]
-  param(
-    [Parameter(ValueFromPipeline = $true)]
-    [string]$Sql,
+function Measure-Isql(
+  [Parameter(Mandatory = $true, ValueFromPipeline = $true)]
+  [string]$Sql,
 
-    [string]$Database = $null
-  )
-
+  [Parameter(Mandatory = $true)]
+  [string]$Database
+) {
   $elapsed = Measure-Command {
     Invoke-Isql -Sql $Sql -Database $Database
   }
   
   return [math]::Round($elapsed.TotalMilliseconds)
+}
+
+function Read-Isql(
+  [Parameter(Mandatory = $true, ValueFromPipeline = $true)]
+  [string]$Sql,
+
+  [Parameter(Mandatory = $true)]
+  [string]$Database
+) {
+  $stdoutAndErr = "SET LIST ON; $Sql" | & $isql -b -q -pag 0 -user $user -password $password $Database 2>&1
+  # Split stdout and stderr -- https://stackoverflow.com/a/68106198/33244
+  #   The [string[]] cast converts the [ErrorRecord] instances to strings too.
+  $stdout, [string[]]$stderr = $stdoutAndErr.Where({ $_ -is [string] }, 'Split')
+
+  if ($LASTEXITCODE -ne 0) {
+    throw 'Failed to execute SQL.'
+  }
+
+  # Parse isql list output. Discard first 2 lines, stop at first blank line.
+  $result = [ordered]@{}
+
+  $resultLines = $stdout | Select-Object -Skip 2
+  foreach ($line in $resultLines) {
+    if ($line.Trim() -eq '') { break }
+    if ($line -match '^(\S+)\s+(.*)$') {
+      $key = $Matches[1]
+      $value = $Matches[2].Trim()
+      $result[$key] = $value
+    }
+  }
+
+  return $result
 }
 
 
@@ -73,6 +103,12 @@ USER 'SYSDBA' PASSWORD 'masterkey'
 PAGE_SIZE 8192;
 "@ | Invoke-Isql
 
+if ($UseLocalProtocol) {
+  $testDatabase = $testDbPath
+} else {
+  $testDatabase = "localhost:$testDbPath"
+}
+
 # Create test table
 @'
 CREATE TABLE perf_test (
@@ -82,7 +118,7 @@ CREATE TABLE perf_test (
     data3 INTEGER,
     created_at TIMESTAMP
 );
-'@ | Invoke-Isql -Database $testDbPath
+'@ | Invoke-Isql -Database $testDatabase
 
 # Insert test data
 $insertMs = @"
@@ -105,7 +141,7 @@ BEGIN
 END
 ^^
 SET TERM ; ^^
-"@ | Measure-Isql -Database $testDbPath
+"@ | Measure-Isql -Database $testDatabase
 
 # Random reads
 $selectMs = @'
@@ -113,33 +149,46 @@ SELECT COUNT(*) FROM perf_test WHERE data3 = 500;
 SELECT * FROM perf_test WHERE id = 12345;
 SELECT AVG(data3) FROM perf_test;
 SELECT * FROM perf_test WHERE id BETWEEN 1000 AND 2000;
-'@ | Measure-Isql -Database $testDbPath
+'@ | Measure-Isql -Database $testDatabase
 
 # Random writes
 $updateMs = @'
 UPDATE perf_test SET data3 = data3 + 1 WHERE MOD(id, 100) = 0;
-'@ | Measure-Isql -Database $testDbPath
+'@ | Measure-Isql -Database $testDatabase
 
 # Create index
 $indexMs = @'
 CREATE INDEX idx_data3 ON perf_test(data3);
-'@ | Measure-Isql -Database $testDbPath
+'@ | Measure-Isql -Database $testDatabase
+
+# Query Firebird info
+$firebirdInfo = @'
+SELECT
+  rdb$get_context('SYSTEM', 'ENGINE_VERSION') "EngineVersion",
+  mon$remote_protocol "RemoteProtocol",
+  mon$client_version "ClientVersion"
+FROM
+  mon$attachments
+WHERE
+  mon$attachment_id = CURRENT_CONNECTION;
+'@ | Read-Isql -Database $testDatabase
+
+# Query system and disk info
+$computerInfo = Get-ComputerInfo | Select-Object CsName, @{Name = 'CsProcessorName'; Expression = { $_.CsProcessors[0].Name.Trim() } }, CsTotalPhysicalMemory, WindowsProductName, WindowsBuildLabEx
+$physicalDisk = Get-Partition -DriveLetter $DriveLetter | Get-Disk | Get-PhysicalDisk 
+$storageProperties = $physicalDisk | Get-StorageAdvancedProperty
+$storageInfo = $physicalDisk | Select-Object FriendlyName, LogicalSectorSize, PhysicalSectorSize, @{Name = 'IsDeviceCacheEnabled'; Expression = { $storageProperties.IsDeviceCacheEnabled } }, @{Name = 'IsPowerProtected'; Expression = { $storageProperties.IsPowerProtected } }
 
 # Cleanup
 Remove-Item $testDbPath -ErrorAction SilentlyContinue
 
-# Query system and disk info
-$computerInfo = Get-ComputerInfo | Select-Object CsName, @{Name="CsProcessorName"; Expression={$_.CsProcessors[0].Name.Trim()}}, CsTotalPhysicalMemory, WindowsProductName, WindowsBuildLabEx
-$physicalDisk = Get-Partition -DriveLetter $DriveLetter | Get-Disk | Get-PhysicalDisk 
-$storageProperties = $physicalDisk | Get-StorageAdvancedProperty
-$storageInfo = $physicalDisk | Select-Object FriendlyName, LogicalSectorSize, PhysicalSectorSize, @{Name="IsDeviceCacheEnabled";Expression={$storageProperties.IsDeviceCacheEnabled}}, @{Name="IsPowerProtected";Expression={$storageProperties.IsPowerProtected}}
-
 # Build result
 [PSCustomObject]@{
-  "insertMs" = $insertMs
-  "selectMs" = $selectMs
-  "updateMs" = $updateMs
-  "createIndexMs" = $indexMs
-  "storage" = $storageInfo
-  "system" = $computerInfo
+  'insertMs'      = $insertMs
+  'selectMs'      = $selectMs
+  'updateMs'      = $updateMs
+  'createIndexMs' = $indexMs
+  'storage'       = $storageInfo
+  'system'        = $computerInfo
+  'firebird'      = $firebirdInfo
 } | ConvertTo-Json
