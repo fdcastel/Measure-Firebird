@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param (
   [string]
-  $DriveLetter = 'C',
+  $DatabaseFolder,
 
   [switch]
   $UseLocalProtocol
@@ -11,19 +11,43 @@ param (
 #
 # Configuration
 #
+
+# Shim for PowerShell Core cross-platform support
+if ($PSVersionTable.PSVersion.Major -lt 6) {
+  $IsWindows = $true
+}
+
+if ($UseLocalProtocol -and (-not $IsWindows)) {
+  throw 'Local protocol (XNET) is only supported on Windows.'
+}
+
 $recordsToInsert = 5 * 1000 * 1000    # 5 million records
+
+$defaultUser = 'SYSDBA'
+$defaultPassword = 'masterkey'
+
+$defaultFirebirdEnvironment = '/opt/firebird'
+if ($IsWindows) {
+  # ToDo: Detect instances from Windows registry.
+  $defaultFirebirdEnvironment = 'C:/Program Files/Firebird/Firebird_3_0'
+}
 
 
 #
 # Initialization
 #
-$user = if ($env:FIREBIRD_USER) { $env:FIREBIRD_USER } elseif ($env:ISC_USER) { $env:ISC_USER } else { 'SYSDBA' }
-$password = if ($env:FIREBIRD_PASSWORD) { $env:FIREBIRD_PASSWORD } elseif ($env:ISC_PASSWORD) { $env:ISC_PASSWORD } else { 'masterkey' }
-$firebirdEnvironment = if ($env:FIREBIRD_ENVIRONMENT) { $env:FIREBIRD_ENVIRONMENT } else { 'C:/Program Files/Firebird/Firebird_3_0' }
+$user = if ($env:FIREBIRD_USER) { $env:FIREBIRD_USER } elseif ($env:ISC_USER) { $env:ISC_USER } else { $defaultUser }
+$password = if ($env:FIREBIRD_PASSWORD) { $env:FIREBIRD_PASSWORD } elseif ($env:ISC_PASSWORD) { $env:ISC_PASSWORD } else { $defaultPassword }
+$firebirdEnvironment = if ($env:FIREBIRD_ENVIRONMENT) { $env:FIREBIRD_ENVIRONMENT } else { $defaultFirebirdEnvironment }
 
-$isql = Join-Path $firebirdEnvironment 'isql.exe'
+# Determine isql location
+$isql = if ($IsWindows) {
+  Join-Path $firebirdEnvironment 'isql.exe'
+} else {
+  Join-Path $firebirdEnvironment 'bin/isql'
+}
 if (-not (Test-Path $isql)) {
-  throw "isql.exe not found at path '$firebirdEnvironment'. Set FIREBIRD_ENVIRONMENT environment variable to the Firebird installation path."
+  throw "isql not found at '$isql'. Set FIREBIRD_ENVIRONMENT environment variable to the Firebird installation path."
 }
 
 
@@ -52,7 +76,7 @@ function Measure-Isql(
   $elapsed = Measure-Command {
     Invoke-Isql -Sql $Sql -Database $Database
   }
-  
+
   return [math]::Round($elapsed.TotalMilliseconds)
 }
 
@@ -95,18 +119,29 @@ function Read-Isql(
 $ErrorActionPreference = 'Stop'
 
 # Create test database
-$testDbPath = "${DriveLetter}:/.firebird-benchmark.fdb"
-Remove-Item $testDbPath -ErrorAction SilentlyContinue
+if (-not $DatabaseFolder) {
+  $DatabaseFolder = [System.IO.Path]::GetTempPath()
+} else {
+  if (-not (Test-Path $DatabaseFolder)) {
+    throw "Database folder '$DatabaseFolder' does not exist."
+  }
+}
+
+$testDatabaseFile = Join-Path $DatabaseFolder '.firebird-benchmark.fdb'
+if (Test-Path $testDatabaseFile) {
+  Remove-Item $testDatabaseFile -Force    # -Force required to delete hidden files (!)
+}
+
 @"
-CREATE DATABASE '$testDbPath'
+CREATE DATABASE '$testDatabaseFile'
 USER 'SYSDBA' PASSWORD 'masterkey'
 PAGE_SIZE 8192;
 "@ | Invoke-Isql
 
 if ($UseLocalProtocol) {
-  $testDatabase = $testDbPath
+  $testDatabase = "xnet://$testDatabaseFile"
 } else {
-  $testDatabase = "localhost:$testDbPath"
+  $testDatabase = $testDatabaseFile
 }
 
 # Create test table
@@ -131,7 +166,7 @@ BEGIN
   WHILE (i < $recordsToInsert) DO
   BEGIN
     INSERT INTO perf_test (id, data1, data2, data3, created_at)
-    VALUES (:i, 
+    VALUES (:i,
             'Test Data ' || :i,
             'More Data ' || (:i * 2),
             MOD(:i, 1000),
@@ -174,13 +209,33 @@ WHERE
 '@ | Read-Isql -Database $testDatabase
 
 # Query system and disk info
-$computerInfo = Get-ComputerInfo | Select-Object CsName, @{Name = 'CsProcessorName'; Expression = { $_.CsProcessors[0].Name.Trim() } }, CsTotalPhysicalMemory, WindowsProductName, WindowsBuildLabEx
-$physicalDisk = Get-Partition -DriveLetter $DriveLetter | Get-Disk | Get-PhysicalDisk 
-$storageProperties = $physicalDisk | Get-StorageAdvancedProperty
-$storageInfo = $physicalDisk | Select-Object FriendlyName, LogicalSectorSize, PhysicalSectorSize, @{Name = 'IsDeviceCacheEnabled'; Expression = { $storageProperties.IsDeviceCacheEnabled } }, @{Name = 'IsPowerProtected'; Expression = { $storageProperties.IsPowerProtected } }
+if ($IsWindows) {
+  $qualifier = Split-Path -Path ([System.IO.Path]::GetTempPath()) -Qualifier
+  $physicalDisk = Get-Partition -DriveLetter $qualifier[0] | Get-Disk | Get-PhysicalDisk
+  $storageProperties = $physicalDisk | Get-StorageAdvancedProperty
+  $storageInfo = $physicalDisk | Select-Object FriendlyName, LogicalSectorSize, PhysicalSectorSize, @{Name = 'IsDeviceCacheEnabled'; Expression = { $storageProperties.IsDeviceCacheEnabled } }, @{Name = 'IsPowerProtected'; Expression = { $storageProperties.IsPowerProtected } }
+
+  $computerInfo = Get-ComputerInfo | Select-Object CsName, @{Name = 'CsProcessorName'; Expression = { $_.CsProcessors[0].Name.Trim() } }, CsTotalPhysicalMemory, WindowsProductName, WindowsBuildLabEx
+} else {
+  # ToDo: Implement for Linux.
+  $storageInfo = $null
+
+  # Get Linux system info
+  $cpuInfo = Get-Content '/proc/cpuinfo' -ErrorAction SilentlyContinue | Select-String '^model name\s*:\s*(.+)$' | Select-Object -First 1
+  $memInfo = Get-Content '/proc/meminfo' -ErrorAction SilentlyContinue | Select-String '^MemTotal\s*:\s*(.+)'
+  $osRelease = Get-Content '/etc/os-release' -ErrorAction SilentlyContinue | Select-String '^PRETTY_NAME=(.+)$'
+  
+  $computerInfo = [PSCustomObject]@{
+    Hostname = hostname
+    ProcessorName = if ($cpuInfo) { $cpuInfo.Matches.Groups[1].Value.Trim() } else { $null }
+    TotalMemory = if ($memInfo) { $memInfo.Matches.Groups[1].Value } else { $null }
+    OSName = if ($osRelease) { $osRelease.Matches.Groups[1].Value.Trim('"') } else { $null }
+    KernelInfo = uname -a
+  }
+}
 
 # Cleanup
-Remove-Item $testDbPath -ErrorAction SilentlyContinue
+Remove-Item $testDatabaseFile -ErrorAction SilentlyContinue
 
 # Build result
 [PSCustomObject]@{

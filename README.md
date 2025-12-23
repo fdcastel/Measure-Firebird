@@ -25,7 +25,7 @@ iwr https://tinyurl.com/Measure-Firebird -UseBasicParsing | iex
 
 ## Prerequisites
 
-- **Windows OS**: Requires PowerShell (5.1+)
+- **Powershell**: Requires PowerShell 5.1+
 - **Firebird SQL**: Must have Firebird 3.0 or later installed
 - **Permissions**: Administrator rights may be required for disk information queries
 
@@ -35,22 +35,22 @@ iwr https://tinyurl.com/Measure-Firebird -UseBasicParsing | iex
 
 The script respects the following environment variables:
 
-| Variable                              | Description                | Default                                |
-|---------------------------------------|----------------------------|----------------------------------------|
-| `FIREBIRD_USER` or `ISC_USER`         | Database username          | `SYSDBA`                               |
-| `FIREBIRD_PASSWORD` or `ISC_PASSWORD` | Database password          | `masterkey`                            |
-| `FIREBIRD_ENVIRONMENT`                | Firebird installation path | (Default Instance location on Windows) |
+| Variable                              | Description                | Default                                                   |
+|---------------------------------------|----------------------------|-----------------------------------------------------------|
+| `FIREBIRD_USER` or `ISC_USER`         | Database username          | `SYSDBA`                                                  |
+| `FIREBIRD_PASSWORD` or `ISC_PASSWORD` | Database password          | `masterkey`                                               |
+| `FIREBIRD_ENVIRONMENT`                | Firebird installation path | `/opt/firebird` or default instance location (on Windows) |
 
 ### Script Parameters
 
 ```powershell
-.\Measure-Firebird.ps1 [-DriveLetter <String>] [-UseLocalProtocol]
+.\Measure-Firebird.ps1 [[-DatabaseFolder] <string>] [-UseLocalProtocol]
 ```
 
 **Parameters:**
 
-- `-DriveLetter` (optional): Drive letter where the test database will be created. Default: `C`
-- `-UseLocalProtocol` (optional): Use local protocol (`xnet`) instead of network protocol (`inet`)
+- `-DatabaseFolder` (optional): Existing folder where the test database will be created. If not provided, the system temporary folder is used.
+- `-UseLocalProtocol` (optional): Use local protocol (`xnet`) instead of network protocol (`inet`).
 
 ## Usage
 
@@ -62,12 +62,12 @@ Run the benchmark with default settings:
 .\Measure-Firebird.ps1
 ```
 
-### Specify Drive Letter
+### Specify a database test location
 
 Test on a different drive (e.g., D:):
 
 ```powershell
-.\Measure-Firebird.ps1 -DriveLetter D
+.\Measure-Firebird.ps1 -DatabaseFolder D:\
 ```
 
 ### Use Local Protocol
@@ -76,10 +76,4 @@ Run without network protocol overhead:
 
 ```powershell
 .\Measure-Firebird.ps1 -UseLocalProtocol
-```
-
-### Combined Parameters
-
-```powershell
-.\Measure-Firebird.ps1 -DriveLetter E -UseLocalProtocol
 ```
