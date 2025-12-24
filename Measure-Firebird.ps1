@@ -128,7 +128,10 @@ if (-not $DatabaseFolder) {
 }
 
 $testDatabaseFile = Join-Path $DatabaseFolder '.firebird-benchmark.fdb'
+Write-Verbose "Creating test database: $testDatabaseFile"
+
 if (Test-Path $testDatabaseFile) {
+  Write-Verbose "  Removing existing test database: $testDatabaseFile"
   Remove-Item $testDatabaseFile -Force    # -Force required to delete hidden files (!)
 }
 
@@ -140,11 +143,14 @@ PAGE_SIZE 8192;
 
 if ($UseLocalProtocol) {
   $testDatabase = "xnet://$testDatabaseFile"
+  Write-Verbose "  Using xnet (local) protocol."
 } else {
   $testDatabase = $testDatabaseFile
+  Write-Verbose "  Using inet protocol."
 }
 
 # Create test table
+Write-Verbose "Creating test table..."
 @'
 CREATE TABLE perf_test (
     id INTEGER NOT NULL PRIMARY KEY,
@@ -156,6 +162,7 @@ CREATE TABLE perf_test (
 '@ | Invoke-Isql -Database $testDatabase
 
 # Insert test data
+Write-Verbose "Inserting $recordsToInsert records..."
 $insertMs = @"
 SET TERM ^^ ;
 EXECUTE BLOCK
@@ -177,26 +184,34 @@ END
 ^^
 SET TERM ; ^^
 "@ | Measure-Isql -Database $testDatabase
+Write-Verbose "  ${insertMs}ms"
 
 # Random reads
+Write-Verbose "Performing random reads..."
 $selectMs = @'
 SELECT COUNT(*) FROM perf_test WHERE data3 = 500;
 SELECT * FROM perf_test WHERE id = 12345;
 SELECT AVG(data3) FROM perf_test;
 SELECT * FROM perf_test WHERE id BETWEEN 1000 AND 2000;
 '@ | Measure-Isql -Database $testDatabase
+Write-Verbose "  ${selectMs}ms"
 
 # Random writes
+Write-Verbose "Performing random writes..."
 $updateMs = @'
 UPDATE perf_test SET data3 = data3 + 1 WHERE MOD(id, 100) = 0;
 '@ | Measure-Isql -Database $testDatabase
+Write-Verbose "  ${updateMs}ms"
 
 # Create index
+Write-Verbose "Creating index..."
 $indexMs = @'
 CREATE INDEX idx_data3 ON perf_test(data3);
 '@ | Measure-Isql -Database $testDatabase
+Write-Verbose "  ${indexMs}ms"
 
 # Query Firebird info
+Write-Verbose "Collecting system information..."
 $firebirdInfo = @'
 SELECT
   rdb$get_context('SYSTEM', 'ENGINE_VERSION') "EngineVersion",
@@ -235,9 +250,11 @@ if ($IsWindows) {
 }
 
 # Cleanup
+Write-Verbose "Removing test database: $testDatabaseFile"
 Remove-Item $testDatabaseFile -ErrorAction SilentlyContinue
 
 # Build result
+Write-Verbose "Benchmark completed."
 [PSCustomObject]@{
   'insertMs'      = $insertMs
   'selectMs'      = $selectMs
