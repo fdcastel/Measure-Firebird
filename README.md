@@ -10,8 +10,14 @@ It also collects system, storage, and Firebird configuration information to prov
 
 ### Quickstart
 
+Simple usage:
 ```powershell
-iwr https://tinyurl.com/Measure-Firebird -UseBasicParsing | iex
+irm 'https://tinyurl.com/Measure-Firebird' | iex
+```
+
+To pass additional arguments, you may use:
+```powershell
+& ([scriptblock]::Create((irm 'https://tinyurl.com/Measure-Firebird'))) -Verbose -DisableForcedWrites
 ```
 
 ## Features
@@ -44,13 +50,14 @@ The script respects the following environment variables:
 ### Script Parameters
 
 ```powershell
-.\Measure-Firebird.ps1 [[-DatabaseFolder] <string>] [-UseLocalProtocol]
+.\Measure-Firebird.ps1 [[-DatabaseFolder] <string>] [-UseLocalProtocol] [-DisableForcedWrites] 
 ```
 
 **Parameters:**
 
-- `-DatabaseFolder` (optional): Existing folder where the test database will be created. If not provided, the system temporary folder is used.
-- `-UseLocalProtocol` (optional): Use local protocol (`xnet`) instead of network protocol (`inet`).
+- `-DatabaseFolder`: Existing folder where the test database will be created. If not provided, the system temporary folder is used.
+- `-UseLocalProtocol`: Use local protocol (`xnet`) instead of network protocol (`inet`).
+- `-DisableForcedWrites`: Disable [forced writes](https://www.firebirdsql.org/file/documentation/html/en/firebirddocs/qsg5/firebird-5-quickstartguide.html#qsg5-safety-howtocorrupt-fw) on test database.
 
 ## Usage
 
