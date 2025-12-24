@@ -162,7 +162,7 @@ if ($UseLocalProtocol) {
 
 if ($DisableForcedWrites) {
   Write-Verbose "  Disabling forced writes."
-  & $gfix -write async $testDatabase
+  & $gfix -write async -user $user -password $password $testDatabase
 }
 
 
