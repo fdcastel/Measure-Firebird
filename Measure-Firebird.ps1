@@ -4,7 +4,10 @@ param (
   $DatabaseFolder,
 
   [switch]
-  $UseLocalProtocol
+  $UseLocalProtocol,
+
+  [switch]
+  $DisableForcedWrites
 )
 
 
@@ -48,6 +51,16 @@ $isql = if ($IsWindows) {
 }
 if (-not (Test-Path $isql)) {
   throw "isql not found at '$isql'. Set FIREBIRD_ENVIRONMENT environment variable to the Firebird installation path."
+}
+
+# Determine gfix location
+$gfix = if ($IsWindows) {
+  Join-Path $firebirdEnvironment 'gfix.exe'
+} else {
+  Join-Path $firebirdEnvironment 'bin/gfix'
+}
+if (-not (Test-Path $gfix)) {
+  throw "gfix not found at '$gfix'. Set FIREBIRD_ENVIRONMENT environment variable to the Firebird installation path."
 }
 
 
@@ -141,13 +154,17 @@ USER 'SYSDBA' PASSWORD 'masterkey'
 PAGE_SIZE 8192;
 "@ | Invoke-Isql
 
+$testDatabase = $testDatabaseFile
 if ($UseLocalProtocol) {
   $testDatabase = "xnet://$testDatabaseFile"
   Write-Verbose "  Using xnet (local) protocol."
-} else {
-  $testDatabase = $testDatabaseFile
-  Write-Verbose "  Using inet protocol."
 }
+
+if ($DisableForcedWrites) {
+  Write-Verbose "  Disabling forced writes."
+  & $gfix -write async $testDatabase
+}
+
 
 # Create test table
 Write-Verbose "Creating test table..."
