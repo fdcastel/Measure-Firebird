@@ -7,7 +7,10 @@ param (
   $UseLocalProtocol,
 
   [switch]
-  $DisableForcedWrites
+  $DisableForcedWrites,
+
+  [int]
+  $RowCount = 5 * 1000 * 1000    # 5 million records
 )
 
 
@@ -23,8 +26,6 @@ if ($PSVersionTable.PSVersion.Major -lt 6) {
 if ($UseLocalProtocol -and (-not $IsWindows)) {
   throw 'Local protocol (XNET) is only supported on Windows.'
 }
-
-$recordsToInsert = 5 * 1000 * 1000    # 5 million records
 
 $defaultUser = 'SYSDBA'
 $defaultPassword = 'masterkey'
@@ -179,7 +180,7 @@ CREATE TABLE perf_test (
 '@ | Invoke-Isql -Database $testDatabase
 
 # Insert test data
-Write-Verbose "Inserting $recordsToInsert records..."
+Write-Verbose "Inserting $RowCount records..."
 $insertMs = @"
 SET TERM ^^ ;
 EXECUTE BLOCK
@@ -187,7 +188,7 @@ AS
 DECLARE VARIABLE i INTEGER;
 BEGIN
   i = 0;
-  WHILE (i < $recordsToInsert) DO
+  WHILE (i < $RowCount) DO
   BEGIN
     INSERT INTO perf_test (id, data1, data2, data3, created_at)
     VALUES (:i,
